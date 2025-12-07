@@ -1,0 +1,71 @@
+{
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "html-to-figma",
+                "responseMode": "responseNode",
+                "options": {}
+            },
+            "name": "Webhook",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 1,
+            "position": [
+                460,
+                300
+            ],
+            "webhookId": "html-to-figma"
+        },
+        {
+            "parameters": {
+                "url": "={{$json.body.url}}",
+                "mode": "evaluateJavaScript",
+                "code": "// Paste the content of extraction_script.js here if not already present.\n\nfunction extractPage() {\n    function processNode(el) {\n        // Skip hidden elements, scripts, styles\n        if (el.nodeType === Node.ELEMENT_NODE) {\n            const style = window.getComputedStyle(el);\n            if (style.display === 'none' || style.visibility === 'hidden') return null;\n            if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'LINK', 'META', 'IFRAME', 'SVG', 'PATH'].includes(el.tagName)) return null;\n        }\n\n        // --- EXTRACT STYLES ---\n        let computedStyle = {};\n        if (el.nodeType === Node.ELEMENT_NODE) {\n            const style = window.getComputedStyle(el);\n            computedStyle = {\n                backgroundColor: style.backgroundColor,\n                color: style.color,\n                fontSize: style.fontSize,\n                fontWeight: style.fontWeight,\n                fontFamily: style.fontFamily,\n                textAlign: style.textAlign,\n                borderRadius: style.borderRadius,\n                borderColor: style.borderColor,\n                borderWidth: style.borderWidth,\n                display: style.display,\n                width: style.width,\n                height: style.height,\n                paddingTop: style.paddingTop,\n                paddingRight: style.paddingRight,\n                paddingBottom: style.paddingBottom,\n                paddingLeft: style.paddingLeft\n            };\n        }\n\n        // --- HANDLE TEXT ---\n        if (el.nodeType === Node.TEXT_NODE) {\n            const text = el.textContent.trim();\n            if (text.length > 0) {\n                return { type: 'TEXT', name: 'Text', text: text };\n            }\n            return null;\n        }\n\n        // --- HANDLE ELEMENT ---\n        if (el.nodeType === Node.ELEMENT_NODE) {\n            const children = [];\n            el.childNodes.forEach(child => {\n                const result = processNode(child);\n                if (result) children.push(result);\n            });\n\n            // Special case for images\n            if (el.tagName === 'IMG') {\n                return {\n                    type: 'IMAGE',\n                    name: 'img',\n                    computedStyle,\n                    attributes: { src: el.src }\n                };\n            }\n\n            const hasVisuals = computedStyle.backgroundColor !== 'rgba(0, 0, 0, 0)' && computedStyle.backgroundColor !== 'transparent' || parseFloat(computedStyle.borderWidth) > 0;\n            \n            if (children.length === 0 && !hasVisuals) return null;\n\n            return {\n                type: 'FRAME',\n                name: el.tagName.toLowerCase(),\n                children,\n                computedStyle\n            };\n        }\n        return null;\n    }\n\n    return processNode(document.body);\n}\n\nreturn extractPage();"
+            },
+            "name": "Puppeteer",
+            "type": "n8n-nodes-puppeteer.puppeteer",
+            "typeVersion": 1,
+            "position": [
+                680,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "respondWith": "json",
+                "responseBody": "={{$json}}"
+            },
+            "name": "Respond to Webhook",
+            "type": "n8n-nodes-base.respondToWebhook",
+            "typeVersion": 1,
+            "position": [
+                900,
+                300
+            ]
+        }
+    ],
+    "connections": {
+        "Webhook": {
+            "main": [
+                [
+                    {
+                        "node": "Puppeteer",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Puppeteer": {
+            "main": [
+                [
+                    {
+                        "node": "Respond to Webhook",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    }
+}

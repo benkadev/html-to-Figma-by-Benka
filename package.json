@@ -1,0 +1,26 @@
+{
+    "name": "html-to-figma-plugin",
+    "version": "1.0.0",
+    "description": "Convert HTML content to Figma design",
+    "main": "dist/code.js",
+    "scripts": {
+        "build": "rm -rf dist && vite build -c vite.config.ui.ts && vite build -c vite.config.code.ts",
+        "dev": "npm run build -- --watch",
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "author": "Benka",
+    "license": "ISC",
+    "dependencies": {
+        "react": "^18.2.0",
+        "react-dom": "^18.2.0"
+    },
+    "devDependencies": {
+        "@figma/plugin-typings": "^1.84.0",
+        "@types/react": "^18.2.37",
+        "@types/react-dom": "^18.2.15",
+        "@vitejs/plugin-react": "^4.2.0",
+        "typescript": "^5.2.2",
+        "vite": "^5.0.0",
+        "vite-plugin-singlefile": "^0.13.5"
+    }
+}

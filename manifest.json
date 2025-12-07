@@ -1,0 +1,16 @@
+{
+    "name": "HTML to Figma",
+    "id": "html-to-figma-by-benka",
+    "api": "1.0.0",
+    "main": "dist/code.js",
+    "ui": "dist/ui.html",
+    "editorType": [
+        "figma"
+    ],
+    "networkAccess": {
+        "allowedDomains": [
+            "*"
+        ],
+        "reasoning": "This plugin needs to fetch HTML content from user-provided URLs to convert them into Figma designs."
+    }
+}
