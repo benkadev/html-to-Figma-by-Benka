@@ -2,8 +2,27 @@
 // MUST run in Puppeteer > Evaluate JavaScript
 
 const url = $('Webhook').first().json.body.url;
-await $page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-await new Promise(r => setTimeout(r, 2000)); // Safety wait
+
+// Set initial viewport width to desktop 1800px
+await $page.setViewport({ width: 1800, height: 900 });
+
+await $page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+await new Promise(r => setTimeout(r, 3000)); // Wait for lazy-loaded content
+
+// Get full page height and resize viewport to capture everything
+const fullHeight = await $page.evaluate(() => {
+    return Math.max(
+        document.body.scrollHeight,
+        document.body.offsetHeight,
+        document.documentElement.clientHeight,
+        document.documentElement.scrollHeight,
+        document.documentElement.offsetHeight
+    );
+});
+
+// Set viewport to full page height
+await $page.setViewport({ width: 1800, height: fullHeight });
+await new Promise(r => setTimeout(r, 500)); // Small wait after resize
 
 const extractedData = await $page.evaluate(() => {
 
@@ -75,18 +94,18 @@ const extractedData = await $page.evaluate(() => {
             if (isHidden(el)) return null;
             if (['SCRIPT', 'STYLE', 'META', 'HEAD', 'LINK', 'NOSCRIPT', 'IFRAME', 'PATH'].includes(el.tagName)) return null;
 
-            const rect = el.getBoundingClientRect();
-            if (rect.width < 1 || rect.height < 1) return null;
-
-            // SVG Handling: Case insensitive check
+            // SVG Handling
             if (el.tagName.toLowerCase() === 'svg') {
+                const svgRect = el.getBoundingClientRect();
+                // For SVG, we want visual size. If 0, check children? standard SVG must have size.
+                if (svgRect.width < 1 || svgRect.height < 1) return null;
                 return {
                     type: 'SVG',
                     name: 'svg',
-                    x: rect.x,
-                    y: rect.y,
-                    width: rect.width,
-                    height: rect.height,
+                    x: svgRect.x,
+                    y: svgRect.y,
+                    width: svgRect.width,
+                    height: svgRect.height,
                     svg: el.outerHTML,
                     style: {
                         opacity: parseFloat(window.getComputedStyle(el).opacity),
@@ -104,42 +123,59 @@ const extractedData = await $page.evaluate(() => {
                 if (childNode) children.push(childNode);
             });
 
-            // --- PSEUDO ELEMENTS (::before, ::after) ---
+            // PSEUDO ELEMENTS (::before, ::after)
             ['::before', '::after'].forEach(pseudo => {
-                const style = window.getComputedStyle(el, pseudo);
-                const content = style.content;
+                const pStyle = window.getComputedStyle(el, pseudo);
+                const content = pStyle.content;
                 if (content && content !== 'none' && content !== '""' && content !== 'normal') {
-                    // It has content!
-                    // Measuring is hard without helper, let's try a simple approach first:
-                    // Treat as text node inside the element.
-                    // Position is tricky. For now, we rely on parent's layout or assume centered?
-                    // Better: just add it as a text child.
+                    // Get approximate rect for pseudo
+                    const pRect = el.getBoundingClientRect(); // fallback to parent
                     children.push({
                         type: 'TEXT',
                         name: pseudo,
                         text: content.replace(/['"]/g, ''),
-                        x: rect.x + parseFloat(style.left || '0'), // rough
-                        y: rect.y + parseFloat(style.top || '0'), // rough
-                        width: rect.width, // rough
-                        height: rect.height, // rough
+                        x: pRect.x, // Rough
+                        y: pRect.y,
+                        width: pRect.width,
+                        height: pRect.height,
                         style: {
-                            color: getRgb(style.color),
-                            fontSize: parseFloat(style.fontSize),
-                            fontWeight: style.fontWeight,
-                            fontFamily: style.fontFamily,
-                            opacity: parseFloat(style.opacity),
-                            textAlign: 'center' // Assumption
+                            color: getRgb(pStyle.color),
+                            fontSize: parseFloat(pStyle.fontSize),
+                            fontWeight: pStyle.fontWeight,
+                            fontFamily: pStyle.fontFamily,
+                            opacity: parseFloat(pStyle.opacity),
+                            textAlign: 'center'
                         }
                     });
                 }
             });
+
+            const rect = el.getBoundingClientRect();
+
+            // Pruning Logic:
+            // If it has children, we generally keep it to preserve structure.
+            // If it has no children, we check if it has visuals (bg, border, image).
+            // If neither, we prune.
+            const hasVisuals = (style.backgroundColor && style.backgroundColor !== 'rgba(0, 0, 0, 0)' && style.backgroundColor !== 'transparent') ||
+                (style.borderWidth && style.borderWidth !== '0px') ||
+                (style.backgroundImage && style.backgroundImage !== 'none') ||
+                el.tagName === 'IMG';
+
+            if (children.length === 0 && !hasVisuals) {
+                if (rect.width < 1 || rect.height < 1) return null;
+                // If it has size but no children/visuals? keep it? pure spacer?
+                // Let's prune generic empty empty divs.
+                // return null; 
+            }
+            // Actually, strict pruning:
+            if (children.length === 0 && rect.width < 1 && rect.height < 1) return null;
 
             // Special handling for IMG
             let itemType = 'FRAME';
             let imageSrc = null;
             if (el.tagName === 'IMG') {
                 itemType = 'IMAGE';
-                imageSrc = el.src;
+                imageSrc = el.currentSrc || el.src || el.getAttribute('data-src') || el.srcset?.split(',')[0]?.split(' ')[0];
             } else if (style.backgroundImage && style.backgroundImage !== 'none') {
                 const match = style.backgroundImage.match(/url\(['"]?(.*?)['"]?\)/);
                 if (match && match[1]) {
@@ -165,6 +201,7 @@ const extractedData = await $page.evaluate(() => {
                     display: style.display,
                     position: style.position,
                     flexDirection: style.flexDirection,
+                    flexWrap: style.flexWrap,
                     justifyContent: style.justifyContent,
                     alignItems: style.alignItems,
                     gap: style.gap,

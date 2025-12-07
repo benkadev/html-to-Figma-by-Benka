@@ -43,6 +43,7 @@ interface NodeData {
         display?: string;
         position?: string;
         flexDirection?: string;
+        flexWrap?: string;
         justifyContent?: string;
         alignItems?: string;
         gap?: string;
@@ -69,243 +70,308 @@ figma.ui.onmessage = async (msg) => {
             return;
         }
 
-        // Use current page instead of creating new one
         figma.notify("Starting import...");
 
-        await figma.loadFontAsync({ family: "Inter", style: "Regular" });
-        await figma.loadFontAsync({ family: "Inter", style: "Bold" });
+        // Pre-load common fonts
+        try {
+            await figma.loadFontAsync({ family: "Inter", style: "Regular" });
+            await figma.loadFontAsync({ family: "Inter", style: "Bold" });
+            await figma.loadFontAsync({ family: "Inter", style: "Medium" });
+        } catch (e) {
+            console.error("Failed to preload Inter fonts", e);
+        }
 
-        const rootFrame = await createFigmaNode(node);
+        // Create a wrapper frame for the entire page
+        const wrapperFrame = figma.createFrame();
+
+        // Extract site name from URL
+        let siteName = "Imported Site";
+        try {
+            const urlObj = new URL(url);
+            siteName = urlObj.hostname.replace(/^www\./, '');
+        } catch (e) {
+            siteName = url || "Imported Site";
+        }
+        wrapperFrame.name = siteName;
+
+        // Set wrapper size based on root node dimensions
+        const wrapperWidth = Math.max(1, node.width || 1440);
+        const wrapperHeight = Math.max(1, node.height || 900);
+        wrapperFrame.resize(wrapperWidth, wrapperHeight);
+        wrapperFrame.layoutMode = 'NONE';
+        wrapperFrame.clipsContent = true; // Clip anything outside the frame bounds
+        wrapperFrame.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
+
+        // Create the content starting from the root node
+        // Offset coordinates so everything is relative to (0,0) in the wrapper
+        const offsetX = node.x || 0;
+        const offsetY = node.y || 0;
+
+        const rootFrame = await createFigmaNode(node, 0, offsetX, offsetY);
 
         if (rootFrame) {
-            figma.currentPage.appendChild(rootFrame);
-            figma.viewport.scrollAndZoomIntoView([rootFrame]);
-            figma.notify("Import completed!");
-        } else {
-            figma.notify("Nothing valid imported.");
+            wrapperFrame.appendChild(rootFrame);
+            // Position the root at 0,0 within the wrapper
+            rootFrame.x = 0;
+            rootFrame.y = 0;
         }
+
+        // Position wrapper at origin on the page
+        wrapperFrame.x = 0;
+        wrapperFrame.y = 0;
+
+        figma.currentPage.appendChild(wrapperFrame);
+        figma.viewport.scrollAndZoomIntoView([wrapperFrame]);
+        figma.notify("Import completed!");
     }
 };
 
-async function createFigmaNode(data: NodeData): Promise<SceneNode | null> {
+async function createFigmaNode(data: NodeData, depth: number = 0, offsetX: number = 0, offsetY: number = 0): Promise<SceneNode | null> {
     if (!data) return null;
 
-    // --- TEXT NODE ---
-    if (data.type === 'TEXT') {
-        const textNode = figma.createText();
-        textNode.characters = data.text || "";
+    const indent = "  ".repeat(depth);
+    console.log(`${indent}[createFigmaNode] type=${data.type} name=${data.name || data.text?.substring(0, 20)} children=${data.children?.length || 0}`);
 
-        textNode.resize(data.width, data.height);
+    try {
+        // --- TEXT NODE ---
+        if (data.type === 'TEXT') {
+            const textNode = figma.createText();
+            textNode.name = data.text?.substring(0, 30) || "Text";
 
-        if (data.style) {
-            if (data.style.fontSize) textNode.fontSize = data.style.fontSize;
-            if (data.style.color) textNode.fills = [{ type: 'SOLID', color: data.style.color, opacity: data.style.color.a }];
+            // Font is already preloaded, just set it
+            textNode.fontName = { family: "Inter", style: "Regular" };
 
-            // Basic Weight mapping
-            const style = data.style.fontWeight === '700' || data.style.fontWeight === 'bold' ? 'Bold' : 'Regular';
-            let family = "Inter";
+            // Try to use custom font if specified
+            if (data.style?.fontFamily) {
+                const fontFamily = data.style.fontFamily.split(',')[0].replace(/['\"]/g, '').trim();
+                const fontWeight = data.style.fontWeight || '400';
+                const isBold = fontWeight === '700' || fontWeight === 'bold' || fontWeight === '600' || parseInt(fontWeight) >= 600;
+                const fontStyle = isBold ? 'Bold' : 'Regular';
 
-            if (data.style.fontFamily) {
-                family = data.style.fontFamily.split(',')[0].replace(/['"]/g, '').trim();
+                try {
+                    await figma.loadFontAsync({ family: fontFamily, style: fontStyle });
+                    textNode.fontName = { family: fontFamily, style: fontStyle };
+                } catch (e) {
+                    // Keep Inter as fallback - already set
+                    if (isBold) {
+                        textNode.fontName = { family: "Inter", style: "Bold" };
+                    }
+                }
             }
 
-            const targetFont = { family, style };
-
-            try {
-                await figma.loadFontAsync(targetFont);
-                textNode.fontName = targetFont;
-            } catch (e) {
-                textNode.fontName = { family: "Inter", style: style };
+            // Set font size BEFORE setting characters
+            if (data.style?.fontSize && data.style.fontSize > 0) {
+                textNode.fontSize = data.style.fontSize;
+            } else {
+                textNode.fontSize = 16; // Default font size
             }
 
-            if (data.style.textAlign) {
+            // Set characters (font is now definitely loaded)
+            const textContent = data.text || " ";
+            textNode.characters = textContent;
+
+            // Use a fixed width from extraction with auto height
+            // This preserves line wrapping from the original
+            if (data.width && data.width > 10) {
+                textNode.textAutoResize = 'HEIGHT'; // Fixed width, auto height
+                textNode.resize(data.width, Math.max(data.height || 20, 20));
+            } else {
+                textNode.textAutoResize = 'WIDTH_AND_HEIGHT'; // Fully auto for small/inline text
+            }
+
+            // Set text color
+            if (data.style?.color) {
+                textNode.fills = [{ type: 'SOLID', color: { r: data.style.color.r, g: data.style.color.g, b: data.style.color.b }, opacity: data.style.color.a ?? 1 }];
+            } else {
+                textNode.fills = [{ type: 'SOLID', color: { r: 0, g: 0, b: 0 } }]; // Default black
+            }
+
+            if (data.style?.textAlign) {
                 switch (data.style.textAlign) {
                     case 'center': textNode.textAlignHorizontal = 'CENTER'; break;
                     case 'right': textNode.textAlignHorizontal = 'RIGHT'; break;
                     case 'justify': textNode.textAlignHorizontal = 'JUSTIFIED'; break;
+                    default: textNode.textAlignHorizontal = 'LEFT';
                 }
             }
 
-            if (data.style.lineHeight) {
+            if (data.style?.lineHeight && data.style.lineHeight > 0) {
                 textNode.lineHeight = { value: data.style.lineHeight, unit: 'PIXELS' };
             }
 
-            if (data.style.letterSpacing) {
+            if (data.style?.letterSpacing) {
                 textNode.letterSpacing = { value: data.style.letterSpacing, unit: 'PIXELS' };
             }
+
+            return textNode;
         }
-        return textNode;
-    }
 
-    // Helper to fetch image
-    async function fetchImage(url: string): Promise<ImagePaint | null> {
-        try {
-            const response = await fetch(url);
-            if (!response.ok) return null;
-            const buffer = await response.arrayBuffer();
-            const image = figma.createImage(new Uint8Array(buffer));
-            return {
-                type: 'IMAGE',
-                imageHash: image.hash,
-                scaleMode: 'FILL'
-            };
-        } catch (e) {
-            console.log("Image load error:", url);
-            return null;
-        }
-    }
-
-    // --- IMAGE NODE ---
-    if (data.type === 'IMAGE') {
-        const rect = figma.createRectangle();
-        rect.name = "Image";
-        rect.resize(data.width, data.height);
-
-        let fills: Paint[] = [{ type: 'SOLID', color: { r: 0.85, g: 0.85, b: 0.85 } }];
-
-        if (data.imageSrc) {
-            const imagePaint = await fetchImage(data.imageSrc);
-            if (imagePaint) fills = [imagePaint];
-        }
-        rect.fills = fills;
-        return rect;
-    }
-
-    // --- SVG NODE ---
-    if (data.type === 'SVG' && data.svg) {
-        try {
-            const svgNode = figma.createNodeFromSvg(data.svg);
-            svgNode.name = "SVG";
-            svgNode.resize(data.width, data.height);
-            return svgNode;
-        } catch (e) {
-            console.error("Failed to create SVG", e);
-            return null;
-        }
-    }
-
-    // --- FRAME NODE ---
-    if (data.type === 'FRAME') {
-        const frame = figma.createFrame();
-        frame.name = data.name;
-        // Basic resize with safe limit
-        const safeW = Math.max(0.01, data.width);
-        const safeH = Math.max(0.01, data.height);
-        frame.resize(safeW, safeH);
-
-        // Fills
-        let fills: Paint[] = [];
-
-        // Background Color
-        if (data.style.backgroundColor) {
-            const { r, g, b, a } = data.style.backgroundColor;
-            // Only add fill if it's visible. 
-            // Note: SVG paths often have 0 alpha "backgroundColor" on the bounding box but standard fill?
-            // Wait, we extract backgroundColor style.
-            if (a > 0) {
-                fills.push({ type: 'SOLID', color: { r, g, b }, opacity: a });
+        // Helper to fetch image
+        async function fetchImage(url: string): Promise<ImagePaint | null> {
+            try {
+                const response = await fetch(url);
+                if (!response.ok) return null;
+                const buffer = await response.arrayBuffer();
+                const image = figma.createImage(new Uint8Array(buffer));
+                return {
+                    type: 'IMAGE',
+                    imageHash: image.hash,
+                    scaleMode: 'FILL'
+                };
+            } catch (e) {
+                console.log("Image load error:", url);
+                return null;
             }
         }
 
-        // Background Image
-        if (data.backgroundImage) {
-            const bgImage = await fetchImage(data.backgroundImage);
-            if (bgImage) fills.push(bgImage);
+        // --- IMAGE NODE ---
+        if (data.type === 'IMAGE') {
+            const rect = figma.createRectangle();
+            rect.name = "Image";
+            rect.resize(Math.max(1, data.width || 1), Math.max(1, data.height || 1));
+
+            let fills: Paint[] = [{ type: 'SOLID', color: { r: 0.85, g: 0.85, b: 0.85 } }];
+
+            if (data.imageSrc) {
+                const imagePaint = await fetchImage(data.imageSrc);
+                if (imagePaint) fills = [imagePaint];
+            }
+            rect.fills = fills;
+            return rect;
         }
 
-        frame.fills = fills;
-
-        // Positioning (handled by parent, but we might set absolute layout prop)
-        if (data.style.position === 'absolute' || data.style.position === 'fixed') {
-            frame.layoutPositioning = 'ABSOLUTE';
+        // --- SVG NODE ---
+        if (data.type === 'SVG' && data.svg) {
+            try {
+                const svgNode = figma.createNodeFromSvg(data.svg);
+                svgNode.name = "SVG";
+                const svgW = Math.max(1, data.width || 1);
+                const svgH = Math.max(1, data.height || 1);
+                svgNode.resize(svgW, svgH);
+                return svgNode;
+            } catch (e) {
+                console.error("Failed to create SVG", e);
+                return null;
+            }
         }
 
-        // --- DISABLE AUTO LAYOUT FOR FIDELITY ---
-        // To avoid "stacking" and ensure pixel-perfect matches with the browser's rendering,
-        // we will use Frame positioning (NONE) for everything.
-        // AutoLayout often misinterprets browser spacing (margins vs gap vs padding).
-        frame.layoutMode = 'NONE';
 
-        // Although we disable AL, we can still apply padding visually if needed? 
-        // No, padding in browser affects child position, which is already captured by getBoundingClientRect.
-        // So we just need to container size. Correct.
+        // --- FRAME NODE ---
+        if (data.type === 'FRAME') {
+            const frame = figma.createFrame();
+            frame.name = data.name || "Frame";
 
-        // Clip content if needed
-        if (data.style.overflow === 'hidden' || data.style.overflow === 'scroll' || data.style.overflow === 'auto') {
-            frame.clipsContent = true;
-        }
+            // Use minimum of 1 pixel for dimensions to avoid Figma issues
+            const safeW = Math.max(1, data.width || 1);
+            const safeH = Math.max(1, data.height || 1);
+            frame.resize(safeW, safeH);
 
-        /*
-        // Layout - Try AutoLayout if Flex
-        if (data.style.display === 'flex') {
-             // ... code disabled ...
-        }
-        */
+            // Fills
+            let fills: Paint[] = [];
 
-        // Radius
-        if (data.style.borderRadius) {
-            frame.topLeftRadius = data.style.borderRadius.tl;
-            frame.topRightRadius = data.style.borderRadius.tr;
-            frame.bottomLeftRadius = data.style.borderRadius.bl;
-            frame.bottomRightRadius = data.style.borderRadius.br;
-        }
-
-        // Borders
-        if (data.style.border) {
-            const maxW = Math.max(
-                data.style.border.top.width,
-                data.style.border.right.width,
-                data.style.border.bottom.width,
-                data.style.border.left.width
-            );
-            if (maxW > 0) {
-                const borderColor = data.style.border.top.color || { r: 0, g: 0, b: 0, a: 1 };
-                frame.strokes = [{ type: 'SOLID', color: borderColor, opacity: borderColor.a }];
-                frame.strokeWeight = maxW;
-
-                if (data.style.border.top.width !== data.style.border.bottom.width) {
-                    frame.strokeTopWeight = data.style.border.top.width;
-                    frame.strokeBottomWeight = data.style.border.bottom.width;
-                    frame.strokeLeftWeight = data.style.border.left.width;
-                    frame.strokeRightWeight = data.style.border.right.width;
+            // Background Color
+            if (data.style.backgroundColor) {
+                const { r, g, b, a } = data.style.backgroundColor;
+                // Only add fill if it's visible. 
+                // Note: SVG paths often have 0 alpha "backgroundColor" on the bounding box but standard fill?
+                // Wait, we extract backgroundColor style.
+                if (a > 0) {
+                    fills.push({ type: 'SOLID', color: { r, g, b }, opacity: a });
                 }
             }
-        }
 
-        // Clips Content
-        if (data.style.overflow === 'hidden' || data.style.overflow === 'scroll' || data.style.overflow === 'auto') {
-            frame.clipsContent = true;
-        }
+            // Background Image
+            if (data.backgroundImage) {
+                const bgImage = await fetchImage(data.backgroundImage);
+                if (bgImage) fills.push(bgImage);
+            }
 
-        // Opacity
-        if (typeof data.style.opacity === 'number') {
-            frame.opacity = data.style.opacity;
-        }
+            frame.fills = fills;
 
-        // Recursion
-        if (data.children) {
-            for (const childData of data.children) {
-                const childNode = await createFigmaNode(childData);
-                if (childNode) {
-                    frame.appendChild(childNode);
+            // --- DISABLE AUTO LAYOUT FOR FIDELITY ---
+            // To avoid "stacking" and ensure pixel-perfect matches with the browser's rendering,
+            // we will use Frame positioning (NONE) for everything.
+            // AutoLayout often misinterprets browser spacing (margins vs gap vs padding).
+            // NOTE: We cannot use layoutPositioning = 'ABSOLUTE' when parent has layoutMode = 'NONE'
+            frame.layoutMode = 'NONE';
 
-                    // FIX: Proper positioning logic
-                    // If frame has AutoLayout, child x/y is ignored UNLESS child is absolute.
-                    // If frame is NONE, we MUST set x/y.
-                    const childIsAbsolute = 'layoutPositioning' in childNode && childNode.layoutPositioning === 'ABSOLUTE';
+            // Clip content if needed
+            if (data.style.overflow === 'hidden' || data.style.overflow === 'scroll' || data.style.overflow === 'auto') {
+                frame.clipsContent = true;
+            }
 
-                    if (frame.layoutMode === 'NONE' || childIsAbsolute) {
-                        const relX = childData.x - data.x;
-                        const relY = childData.y - data.y;
+            // Radius
+            if (data.style.borderRadius) {
+                frame.topLeftRadius = data.style.borderRadius.tl;
+                frame.topRightRadius = data.style.borderRadius.tr;
+                frame.bottomLeftRadius = data.style.borderRadius.bl;
+                frame.bottomRightRadius = data.style.borderRadius.br;
+            }
 
-                        if (!isNaN(relX)) childNode.x = relX;
-                        if (!isNaN(relY)) childNode.y = relY;
+            // Borders
+            if (data.style.border) {
+                const maxW = Math.max(
+                    data.style.border.top.width || 0,
+                    data.style.border.right.width || 0,
+                    data.style.border.bottom.width || 0,
+                    data.style.border.left.width || 0
+                );
+                if (maxW > 0) {
+                    const borderColor = data.style.border.top.color || { r: 0, g: 0, b: 0, a: 1 };
+                    // IMPORTANT: Figma color object must NOT contain 'a' - use opacity separately
+                    frame.strokes = [{
+                        type: 'SOLID',
+                        color: { r: borderColor.r, g: borderColor.g, b: borderColor.b },
+                        opacity: borderColor.a ?? 1
+                    }];
+                    frame.strokeWeight = maxW;
+
+                    if (data.style.border.top.width !== data.style.border.bottom.width) {
+                        frame.strokeTopWeight = data.style.border.top.width || 0;
+                        frame.strokeBottomWeight = data.style.border.bottom.width || 0;
+                        frame.strokeLeftWeight = data.style.border.left.width || 0;
+                        frame.strokeRightWeight = data.style.border.right.width || 0;
                     }
                 }
             }
-        }
 
-        return frame;
+            // Opacity
+            if (typeof data.style.opacity === 'number') {
+                frame.opacity = data.style.opacity;
+            }
+
+            // Recursion - pass offset for coordinate normalization
+            if (data.children && data.children.length > 0) {
+                console.log(`${indent}  Processing ${data.children.length} children of ${data.name}`);
+                for (let i = 0; i < data.children.length; i++) {
+                    const childData = data.children[i];
+                    console.log(`${indent}    [${i}] Creating child: ${childData.type} - ${childData.name || childData.text?.substring(0, 20)}`);
+
+                    // Pass offset parameters to recursive call
+                    const childNode = await createFigmaNode(childData, depth + 1, offsetX, offsetY);
+                    if (childNode) {
+                        frame.appendChild(childNode);
+
+                        // Position child relative to parent
+                        // Calculate position relative to parent's origin
+                        const relX = childData.x - data.x;
+                        const relY = childData.y - data.y;
+
+                        if (!isNaN(relX) && isFinite(relX)) childNode.x = relX;
+                        if (!isNaN(relY) && isFinite(relY)) childNode.y = relY;
+                    } else {
+                        console.log(`${indent}    [${i}] Child returned null!`);
+                    }
+                }
+            } else {
+                console.log(`${indent}  No children for ${data.name}`);
+            }
+
+            return frame;
+        }
+        return null;
+    } catch (e) {
+        console.error(`${indent}[ERROR] Failed to create node: ${data.type} - ${data.name || data.text?.substring(0, 20)}`, e);
+        return null;
     }
-    return null;
 }

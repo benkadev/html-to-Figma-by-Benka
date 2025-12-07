@@ -4,7 +4,8 @@ import './ui.css';
 
 const App = () => {
     const [url, setUrl] = useState('');
-    const [webhookUrl, setWebhookUrl] = useState('');
+    // Webhook URL is now hardcoded - no need to enter it each time
+    const webhookUrl = 'https://n8n.tinepsi.com/webhook/html-to-figma';
     const [loading, setLoading] = useState(false);
 
 
@@ -55,17 +56,13 @@ const App = () => {
 
     const handleImport = async () => {
         if (!url) return;
-        if (!webhookUrl) {
-            alert("Please enter your n8n Webhook URL");
-            return;
-        }
         setLoading(true);
 
         try {
             // Send request to n8n via Proxy to avoid CORS errors (Figma runs on origin 'null')
             // We use corsproxy.io to wrap the POST request.
             const proxyPrefix = "https://corsproxy.io/?";
-            const targetUrl = webhookUrl.startsWith(proxyPrefix) ? webhookUrl : proxyPrefix + encodeURIComponent(webhookUrl);
+            const targetUrl = proxyPrefix + encodeURIComponent(webhookUrl);
 
             const response = await fetch(targetUrl, {
                 method: 'POST',
@@ -92,7 +89,7 @@ const App = () => {
 
     return (
         <div className="container">
-            <h2>HTML to Figma (n8n Powered)</h2>
+            <h2>HTML to Figma</h2>
             <div className="input-group">
                 <label>Website URL</label>
                 <input
@@ -102,21 +99,12 @@ const App = () => {
                     placeholder="https://example.com"
                 />
             </div>
-            <div className="input-group">
-                <label>n8n Webhook URL</label>
-                <input
-                    type="url"
-                    value={webhookUrl}
-                    onChange={(e) => setWebhookUrl(e.target.value)}
-                    placeholder="https://n8n.your-server.com/webhook/..."
-                />
-            </div>
 
             <button onClick={handleImport} disabled={loading}>
                 {loading ? 'Processing on Server...' : 'Import to Figma'}
             </button>
             <div className="note">
-                <p>Uses n8n + Puppeteer for pixel-perfect extraction.</p>
+                <p>Desktop 1800px • Powered by n8n + Puppeteer</p>
             </div>
         </div>
     );
