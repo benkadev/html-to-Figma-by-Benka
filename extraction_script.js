@@ -7,10 +7,10 @@ const url = $('Webhook').first().json.body.url;
 await $page.setViewport({ width: 1800, height: 900 });
 
 await $page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
-await new Promise(r => setTimeout(r, 3000)); // Wait for lazy-loaded content
+await new Promise(function (r) { setTimeout(r, 3000); }); // Wait for lazy-loaded content
 
 // Get full page height and resize viewport to capture everything
-const fullHeight = await $page.evaluate(() => {
+const fullHeight = await $page.evaluate(function () {
     return Math.max(
         document.body.scrollHeight,
         document.body.offsetHeight,
@@ -22,9 +22,9 @@ const fullHeight = await $page.evaluate(() => {
 
 // Set viewport to full page height
 await $page.setViewport({ width: 1800, height: fullHeight });
-await new Promise(r => setTimeout(r, 500)); // Small wait after resize
+await new Promise(function (r) { setTimeout(r, 500); }); // Small wait after resize
 
-const extractedData = await $page.evaluate(() => {
+const extractedData = await $page.evaluate(function () {
 
     // --- Helpers ---
     function getRgb(color) {
@@ -41,8 +41,27 @@ const extractedData = await $page.evaluate(() => {
     }
 
     function isHidden(el) {
-        const style = window.getComputedStyle(el);
+        var style = window.getComputedStyle(el);
+        // Only check basic visibility - don't check dimensions as Framer containers may report 0
         return style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0';
+    }
+
+    // Check if an element is a large empty container that should be skipped
+    function isEmptyLargeContainer(el, rect) {
+        // Skip containers taller than 5000px with no visible background or content
+        if (rect.height > 5000) {
+            const style = window.getComputedStyle(el);
+            const hasBackground = style.backgroundColor !== 'rgba(0, 0, 0, 0)' &&
+                style.backgroundColor !== 'transparent';
+            const hasBackgroundImage = style.backgroundImage !== 'none';
+            const hasBorder = parseFloat(style.borderWidth) > 0;
+
+            // If no visual styling and very tall, it's likely a wrapper
+            if (!hasBackground && !hasBackgroundImage && !hasBorder) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // Parse CSS transform matrix to extract translate, scale, rotate
@@ -56,12 +75,12 @@ const extractedData = await $page.evaluate(() => {
         let a, b, c, d, tx, ty;
 
         if (matrix3d) {
-            const values = matrix3d[1].split(',').map(v => parseFloat(v.trim()));
+            var values = matrix3d[1].split(',').map(function (v) { return parseFloat(v.trim()); });
             a = values[0]; b = values[1]; tx = values[12];
             c = values[4]; d = values[5]; ty = values[13];
         } else if (matrix2d) {
-            const values = matrix2d[1].split(',').map(v => parseFloat(v.trim()));
-            [a, b, c, d, tx, ty] = values;
+            var values = matrix2d[1].split(',').map(function (v) { return parseFloat(v.trim()); });
+            a = values[0]; b = values[1]; c = values[2]; d = values[3]; tx = values[4]; ty = values[5];
         } else {
             return null;
         }
@@ -89,7 +108,7 @@ const extractedData = await $page.evaluate(() => {
 
         // --- TEXT NODES ---
         if (el.nodeType === 3) { // Text
-            const textContent = el.textContent?.trim();
+            const textContent = el.textContent ? el.textContent.trim() : '';
             if (!textContent) return null;
 
             // Get parent styles for text
@@ -129,7 +148,7 @@ const extractedData = await $page.evaluate(() => {
         // --- ELEMENT NODES ---
         if (el.nodeType === 1) {
             if (isHidden(el)) return null;
-            if (['SCRIPT', 'STYLE', 'META', 'HEAD', 'LINK', 'NOSCRIPT', 'IFRAME', 'PATH'].includes(el.tagName)) return null;
+            if (['SCRIPT', 'STYLE', 'META', 'HEAD', 'LINK', 'NOSCRIPT', 'PATH'].indexOf(el.tagName) !== -1) return null;
 
             // SVG Handling
             if (el.tagName.toLowerCase() === 'svg') {
@@ -154,14 +173,14 @@ const extractedData = await $page.evaluate(() => {
             const style = window.getComputedStyle(el);
 
             // Collect children first
-            const children = [];
-            el.childNodes.forEach(child => {
-                const childNode = traverse(child);
+            var children = [];
+            el.childNodes.forEach(function (child) {
+                var childNode = traverse(child);
                 if (childNode) children.push(childNode);
             });
 
             // PSEUDO ELEMENTS (::before, ::after) - ENHANCED
-            ['::before', '::after'].forEach(pseudo => {
+            ['::before', '::after'].forEach(function (pseudo) {
                 const pStyle = window.getComputedStyle(el, pseudo);
                 const content = pStyle.content;
 
@@ -265,12 +284,22 @@ const extractedData = await $page.evaluate(() => {
             // Actually, strict pruning:
             if (children.length === 0 && rect.width < 1 && rect.height < 1) return null;
 
+            // NOTE: Removed isEmptyLargeContainer check - was filtering valid Framer containers
+
             // Special handling for IMG
             let itemType = 'FRAME';
             let imageSrc = null;
             if (el.tagName === 'IMG') {
                 itemType = 'IMAGE';
-                imageSrc = el.currentSrc || el.src || el.getAttribute('data-src') || el.srcset?.split(',')[0]?.split(' ')[0];
+                let srcsetSrc = null;
+                if (el.srcset) {
+                    const srcsetParts = el.srcset.split(',');
+                    if (srcsetParts[0]) {
+                        const srcParts = srcsetParts[0].split(' ');
+                        srcsetSrc = srcParts[0] || null;
+                    }
+                }
+                imageSrc = el.currentSrc || el.src || el.getAttribute('data-src') || srcsetSrc;
             } else if (style.backgroundImage && style.backgroundImage !== 'none') {
                 const match = style.backgroundImage.match(/url\(['"]?(.*?)['"]?\)/);
                 if (match && match[1]) {
