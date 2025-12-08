@@ -7,6 +7,7 @@ const App = () => {
     // Webhook URL is now hardcoded - no need to enter it each time
     const webhookUrl = 'https://n8n.tinepsi.com/webhook/html-to-figma';
     const [loading, setLoading] = useState(false);
+    const [simplifyLayers, setSimplifyLayers] = useState(true); // Simplify by default
 
 
     // Shared type definition - Matching what Extraction Script output
@@ -77,7 +78,7 @@ const App = () => {
             // Handle n8n returning an array (common) vs object
             const rootNode = Array.isArray(data) ? data[0] : (data.result || data);
 
-            parent.postMessage({ pluginMessage: { type: 'import-html', payload: { url, node: rootNode } } }, '*');
+            parent.postMessage({ pluginMessage: { type: 'import-html', payload: { url, node: rootNode, simplifyLayers } } }, '*');
             setLoading(false);
 
         } catch (error) {
@@ -98,6 +99,18 @@ const App = () => {
                     onChange={(e) => setUrl(e.target.value)}
                     placeholder="https://example.com"
                 />
+            </div>
+
+            <div className="input-group checkbox-group">
+                <label>
+                    <input
+                        type="checkbox"
+                        checked={simplifyLayers}
+                        onChange={(e) => setSimplifyLayers(e.target.checked)}
+                    />
+                    Simplify layers (recommandé)
+                </label>
+                <small>Fusionne les conteneurs inutiles et réduit le nombre de calques</small>
             </div>
 
             <button onClick={handleImport} disabled={loading}>

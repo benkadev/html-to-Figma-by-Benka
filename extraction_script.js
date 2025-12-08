@@ -45,6 +45,43 @@ const extractedData = await $page.evaluate(() => {
         return style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0';
     }
 
+    // Parse CSS transform matrix to extract translate, scale, rotate
+    function parseTransform(transformString) {
+        if (!transformString || transformString === 'none') return null;
+
+        // Match matrix(a, b, c, d, tx, ty) or matrix3d(...)
+        const matrix2d = transformString.match(/matrix\(([^)]+)\)/);
+        const matrix3d = transformString.match(/matrix3d\(([^)]+)\)/);
+
+        let a, b, c, d, tx, ty;
+
+        if (matrix3d) {
+            const values = matrix3d[1].split(',').map(v => parseFloat(v.trim()));
+            a = values[0]; b = values[1]; tx = values[12];
+            c = values[4]; d = values[5]; ty = values[13];
+        } else if (matrix2d) {
+            const values = matrix2d[1].split(',').map(v => parseFloat(v.trim()));
+            [a, b, c, d, tx, ty] = values;
+        } else {
+            return null;
+        }
+
+        // Extract rotation angle (in degrees)
+        const rotation = Math.atan2(b, a) * (180 / Math.PI);
+
+        // Extract scale
+        const scaleX = Math.sqrt(a * a + b * b);
+        const scaleY = Math.sqrt(c * c + d * d);
+
+        return {
+            translateX: tx || 0,
+            translateY: ty || 0,
+            rotation: rotation || 0,
+            scaleX: scaleX !== 1 ? scaleX : undefined,
+            scaleY: scaleY !== 1 ? scaleY : undefined
+        };
+    }
+
     function traverse(el) {
         if (el.nodeType !== 1 && el.nodeType !== 3) return null; // Only Element or Text
 
@@ -123,30 +160,88 @@ const extractedData = await $page.evaluate(() => {
                 if (childNode) children.push(childNode);
             });
 
-            // PSEUDO ELEMENTS (::before, ::after)
+            // PSEUDO ELEMENTS (::before, ::after) - ENHANCED
             ['::before', '::after'].forEach(pseudo => {
                 const pStyle = window.getComputedStyle(el, pseudo);
                 const content = pStyle.content;
-                if (content && content !== 'none' && content !== '""' && content !== 'normal') {
-                    // Get approximate rect for pseudo
-                    const pRect = el.getBoundingClientRect(); // fallback to parent
-                    children.push({
-                        type: 'TEXT',
+
+                // Check if pseudo-element has content OR visual properties (background, border)
+                const hasContent = content && content !== 'none' && content !== '""' && content !== 'normal';
+                const hasVisuals = (pStyle.backgroundColor && pStyle.backgroundColor !== 'rgba(0, 0, 0, 0)' && pStyle.backgroundColor !== 'transparent') ||
+                    (pStyle.borderWidth && pStyle.borderWidth !== '0px') ||
+                    (pStyle.backgroundImage && pStyle.backgroundImage !== 'none');
+
+                if (hasContent || hasVisuals) {
+                    const pRect = el.getBoundingClientRect(); // Fallback to parent rect
+
+                    // Calculate position based on CSS positioning
+                    const position = pStyle.position;
+                    const top = pStyle.top !== 'auto' ? parseFloat(pStyle.top) : 0;
+                    const left = pStyle.left !== 'auto' ? parseFloat(pStyle.left) : 0;
+                    const right = pStyle.right !== 'auto' ? parseFloat(pStyle.right) : null;
+                    const bottom = pStyle.bottom !== 'auto' ? parseFloat(pStyle.bottom) : null;
+
+                    // Calculate width and height
+                    let pseudoWidth = pStyle.width !== 'auto' ? parseFloat(pStyle.width) : pRect.width;
+                    let pseudoHeight = pStyle.height !== 'auto' ? parseFloat(pStyle.height) : pRect.height;
+
+                    // Handle inset positioning (before:inset-0)
+                    if (pStyle.inset && pStyle.inset !== 'auto') {
+                        const insetValue = parseFloat(pStyle.inset);
+                        pseudoWidth = pRect.width - (insetValue * 2);
+                        pseudoHeight = pRect.height - (insetValue * 2);
+                    }
+
+                    // Determine type: TEXT if has text content, FRAME if visual only
+                    const nodeType = hasContent ? 'TEXT' : 'FRAME';
+
+                    const pseudoNode = {
+                        type: nodeType,
                         name: pseudo,
-                        text: content.replace(/['"]/g, ''),
-                        x: pRect.x, // Rough
-                        y: pRect.y,
-                        width: pRect.width,
-                        height: pRect.height,
+                        x: pRect.x + left,
+                        y: pRect.y + top,
+                        width: pseudoWidth,
+                        height: pseudoHeight,
                         style: {
-                            color: getRgb(pStyle.color),
-                            fontSize: parseFloat(pStyle.fontSize),
-                            fontWeight: pStyle.fontWeight,
-                            fontFamily: pStyle.fontFamily,
+                            backgroundColor: getRgb(pStyle.backgroundColor),
+                            position: position,
                             opacity: parseFloat(pStyle.opacity),
-                            textAlign: 'center'
+                            zIndex: pStyle.zIndex,
+                            borderRadius: {
+                                tl: parseFloat(pStyle.borderTopLeftRadius),
+                                tr: parseFloat(pStyle.borderTopRightRadius),
+                                bl: parseFloat(pStyle.borderBottomLeftRadius),
+                                br: parseFloat(pStyle.borderBottomRightRadius)
+                            },
+                            border: {
+                                top: { width: parseFloat(pStyle.borderTopWidth), color: getRgb(pStyle.borderTopColor) },
+                                right: { width: parseFloat(pStyle.borderRightWidth), color: getRgb(pStyle.borderRightColor) },
+                                bottom: { width: parseFloat(pStyle.borderBottomWidth), color: getRgb(pStyle.borderBottomColor) },
+                                left: { width: parseFloat(pStyle.borderLeftWidth), color: getRgb(pStyle.borderLeftColor) }
+                            },
+                            transform: parseTransform(pStyle.transform)
                         }
-                    });
+                    };
+
+                    // Add text-specific properties if it's a text node
+                    if (nodeType === 'TEXT') {
+                        pseudoNode.text = content.replace(/['"]/g, '');
+                        pseudoNode.style.color = getRgb(pStyle.color);
+                        pseudoNode.style.fontSize = parseFloat(pStyle.fontSize);
+                        pseudoNode.style.fontWeight = pStyle.fontWeight;
+                        pseudoNode.style.fontFamily = pStyle.fontFamily;
+                        pseudoNode.style.textAlign = pStyle.textAlign;
+                    }
+
+                    // Add background image if present
+                    if (pStyle.backgroundImage && pStyle.backgroundImage !== 'none') {
+                        const match = pStyle.backgroundImage.match(/url\(['"]?(.*?)['"]?\)/);
+                        if (match && match[1]) {
+                            pseudoNode.backgroundImage = match[1];
+                        }
+                    }
+
+                    children.push(pseudoNode);
                 }
             });
 
@@ -205,6 +300,11 @@ const extractedData = await $page.evaluate(() => {
                     justifyContent: style.justifyContent,
                     alignItems: style.alignItems,
                     gap: style.gap,
+                    // Grid layout properties
+                    gridTemplateColumns: style.gridTemplateColumns !== 'none' ? style.gridTemplateColumns : null,
+                    gridTemplateRows: style.gridTemplateRows !== 'none' ? style.gridTemplateRows : null,
+                    gridColumnGap: style.gridColumnGap !== 'normal' ? parseFloat(style.gridColumnGap) : null,
+                    gridRowGap: style.gridRowGap !== 'normal' ? parseFloat(style.gridRowGap) : null,
                     padding: {
                         t: parseFloat(style.paddingTop),
                         r: parseFloat(style.paddingRight),
@@ -226,7 +326,9 @@ const extractedData = await $page.evaluate(() => {
                     boxShadow: style.boxShadow !== 'none' ? style.boxShadow : null,
                     overflow: style.overflow,
                     opacity: parseFloat(style.opacity),
-                    zIndex: style.zIndex
+                    zIndex: style.zIndex,
+                    // Transform properties
+                    transform: parseTransform(style.transform)
                 }
             };
         }

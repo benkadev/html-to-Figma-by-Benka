@@ -17,6 +17,14 @@ function parseColor(colorStr?: string): { r: number, g: number, b: number } | nu
 // Helper types matching the new extraction script
 interface Rgba { r: number, g: number, b: number, a: number }
 
+interface CssTransform {
+    translateX?: number;
+    translateY?: number;
+    rotation?: number;
+    scaleX?: number;
+    scaleY?: number;
+}
+
 interface NodeData {
     type: 'FRAME' | 'TEXT' | 'IMAGE' | 'SVG';
     name: string;
@@ -47,6 +55,11 @@ interface NodeData {
         justifyContent?: string;
         alignItems?: string;
         gap?: string;
+        // Grid layout properties
+        gridTemplateColumns?: string;
+        gridTemplateRows?: string;
+        gridColumnGap?: number;
+        gridRowGap?: number;
         padding?: { t: number, r: number, b: number, l: number };
         border?: {
             top: { width: number, color: Rgba },
@@ -59,6 +72,8 @@ interface NodeData {
         overflow?: string;
         opacity?: number;
         zIndex?: string;
+        // Transform properties
+        transform?: CssTransform;
     };
 }
 
@@ -81,8 +96,8 @@ figma.ui.onmessage = async (msg) => {
             console.error("Failed to preload Inter fonts", e);
         }
 
-        // Create a wrapper frame for the entire page
-        const wrapperFrame = figma.createFrame();
+        // Create a wrapper SECTION for the entire page (instead of Frame)
+        const wrapperSection = figma.createSection();
 
         // Extract site name from URL
         let siteName = "Imported Site";
@@ -92,15 +107,12 @@ figma.ui.onmessage = async (msg) => {
         } catch (e) {
             siteName = url || "Imported Site";
         }
-        wrapperFrame.name = siteName;
+        wrapperSection.name = siteName;
 
         // Set wrapper size based on root node dimensions
         const wrapperWidth = Math.max(1, node.width || 1440);
         const wrapperHeight = Math.max(1, node.height || 900);
-        wrapperFrame.resize(wrapperWidth, wrapperHeight);
-        wrapperFrame.layoutMode = 'NONE';
-        wrapperFrame.clipsContent = true; // Clip anything outside the frame bounds
-        wrapperFrame.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
+        wrapperSection.resizeWithoutConstraints(wrapperWidth, wrapperHeight);
 
         // Create the content starting from the root node
         // Offset coordinates so everything is relative to (0,0) in the wrapper
@@ -110,27 +122,79 @@ figma.ui.onmessage = async (msg) => {
         const rootFrame = await createFigmaNode(node, 0, offsetX, offsetY);
 
         if (rootFrame) {
-            wrapperFrame.appendChild(rootFrame);
+            wrapperSection.appendChild(rootFrame);
             // Position the root at 0,0 within the wrapper
             rootFrame.x = 0;
             rootFrame.y = 0;
         }
 
         // Position wrapper at origin on the page
-        wrapperFrame.x = 0;
-        wrapperFrame.y = 0;
+        wrapperSection.x = 0;
+        wrapperSection.y = 0;
 
-        figma.currentPage.appendChild(wrapperFrame);
-        figma.viewport.scrollAndZoomIntoView([wrapperFrame]);
+        figma.currentPage.appendChild(wrapperSection);
+        figma.viewport.scrollAndZoomIntoView([wrapperSection]);
         figma.notify("Import completed!");
     }
 };
 
+// Parse box-shadow CSS string into Figma effects
+function parseBoxShadow(shadowString: string): Effect[] {
+    if (!shadowString || shadowString === 'none') return [];
+
+    const effects: Effect[] = [];
+
+    // Split by comma (multiple shadows)
+    const shadows = shadowString.split(/,(?![^(]*\))/); // Split by comma not inside parentheses
+
+    for (const shadow of shadows) {
+        const trimmed = shadow.trim();
+
+        // Check if it's inset
+        const isInset = trimmed.startsWith('inset');
+        const shadowWithoutInset = isInset ? trimmed.replace('inset', '').trim() : trimmed;
+
+        // Match: offsetX offsetY blur spread color
+        // Example: 0px 0px 2px rgba(0,0,0,0.2)
+        const match = shadowWithoutInset.match(/(-?[\d.]+)px\s+(-?[\d.]+)px(?:\s+(-?[\d.]+)px)?(?:\s+(-?[\d.]+)px)?\s+(rgba?\([^)]+\)|#[0-9a-fA-F]+)/);
+
+        if (match) {
+            const offsetX = parseFloat(match[1]);
+            const offsetY = parseFloat(match[2]);
+            const blur = match[3] ? parseFloat(match[3]) : 0;
+            const spread = match[4] ? parseFloat(match[4]) : 0;
+            const colorString = match[5];
+
+            // Parse color
+            let r = 0, g = 0, b = 0, a = 1;
+            const rgbaMatch = colorString.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+            if (rgbaMatch) {
+                r = parseInt(rgbaMatch[1]) / 255;
+                g = parseInt(rgbaMatch[2]) / 255;
+                b = parseInt(rgbaMatch[3]) / 255;
+                a = rgbaMatch[4] ? parseFloat(rgbaMatch[4]) : 1;
+            }
+
+            effects.push({
+                type: isInset ? 'INNER_SHADOW' : 'DROP_SHADOW',
+                color: { r, g, b, a },
+                offset: { x: offsetX, y: offsetY },
+                radius: blur,
+                spread: spread,
+                visible: true,
+                blendMode: 'NORMAL'
+            });
+        }
+    }
+
+    return effects;
+}
+
 async function createFigmaNode(data: NodeData, depth: number = 0, offsetX: number = 0, offsetY: number = 0): Promise<SceneNode | null> {
     if (!data) return null;
 
-    const indent = "  ".repeat(depth);
-    console.log(`${indent}[createFigmaNode] type=${data.type} name=${data.name || data.text?.substring(0, 20)} children=${data.children?.length || 0}`);
+    // Debug mode flag - set to true to enable verbose logging
+    const DEBUG = false;
 
     try {
         // --- TEXT NODE ---
@@ -219,7 +283,7 @@ async function createFigmaNode(data: NodeData, depth: number = 0, offsetX: numbe
                     scaleMode: 'FILL'
                 };
             } catch (e) {
-                console.log("Image load error:", url);
+                console.error("[ERROR] Image load failed:", url);
                 return null;
             }
         }
@@ -340,12 +404,64 @@ async function createFigmaNode(data: NodeData, depth: number = 0, offsetX: numbe
                 frame.opacity = data.style.opacity;
             }
 
+            // Box-shadow (parse and apply as effects)
+            if (data.style.boxShadow) {
+                const effects = parseBoxShadow(data.style.boxShadow);
+                if (effects.length > 0) {
+                    frame.effects = effects;
+                }
+            }
+
+            // Transform (rotation only - Figma doesn't support translate in frames directly)
+            if (data.style.transform) {
+                const transform = data.style.transform;
+
+                // Apply rotation if present
+                if (transform.rotation && transform.rotation !== 0) {
+                    frame.rotation = transform.rotation;
+                }
+
+                // Note: Figma doesn't have direct translate on frames
+                // Translate is handled through positioning (x, y)
+                // Scale is not directly supported on frames in Figma
+                // We document it in the layer name for reference
+                if (transform.scaleX || transform.scaleY || transform.translateX || transform.translateY) {
+                    const transformInfo = [];
+                    if (transform.translateX) transformInfo.push(`translateX:${transform.translateX.toFixed(1)}px`);
+                    if (transform.translateY) transformInfo.push(`translateY:${transform.translateY.toFixed(1)}px`);
+                    if (transform.scaleX && transform.scaleX !== 1) transformInfo.push(`scaleX:${transform.scaleX.toFixed(2)}`);
+                    if (transform.scaleY && transform.scaleY !== 1) transformInfo.push(`scaleY:${transform.scaleY.toFixed(2)}`);
+
+                    if (transformInfo.length > 0) {
+                        frame.name = `${frame.name} [${transformInfo.join(', ')}]`;
+                    }
+                }
+            }
+
+            // Grid Layout (documented in layer name as Figma doesn't have native grid)
+            if (data.style.display === 'grid' && data.style.gridTemplateColumns) {
+                const gridInfo = [`grid-cols:${data.style.gridTemplateColumns}`];
+                if (data.style.gridTemplateRows) gridInfo.push(`grid-rows:${data.style.gridTemplateRows}`);
+                if (data.style.gridColumnGap) gridInfo.push(`gap-x:${data.style.gridColumnGap}px`);
+                if (data.style.gridRowGap) gridInfo.push(`gap-y:${data.style.gridRowGap}px`);
+
+                frame.name = `${frame.name} [${gridInfo.join(', ')}]`;
+            }
+
             // Recursion - pass offset for coordinate normalization
             if (data.children && data.children.length > 0) {
-                console.log(`${indent}  Processing ${data.children.length} children of ${data.name}`);
-                for (let i = 0; i < data.children.length; i++) {
-                    const childData = data.children[i];
-                    console.log(`${indent}    [${i}] Creating child: ${childData.type} - ${childData.name || childData.text?.substring(0, 20)}`);
+
+                // Sort children by z-index to ensure proper layering
+                // Lower z-index = added first = appears behind
+                // Higher z-index = added later = appears in front
+                const sortedChildren = [...data.children].sort((a, b) => {
+                    const zIndexA = parseInt(a.style?.zIndex || '0') || 0;
+                    const zIndexB = parseInt(b.style?.zIndex || '0') || 0;
+                    return zIndexA - zIndexB;
+                });
+
+                for (let i = 0; i < sortedChildren.length; i++) {
+                    const childData = sortedChildren[i];
 
                     // Pass offset parameters to recursive call
                     const childNode = await createFigmaNode(childData, depth + 1, offsetX, offsetY);
@@ -359,19 +475,17 @@ async function createFigmaNode(data: NodeData, depth: number = 0, offsetX: numbe
 
                         if (!isNaN(relX) && isFinite(relX)) childNode.x = relX;
                         if (!isNaN(relY) && isFinite(relY)) childNode.y = relY;
-                    } else {
-                        console.log(`${indent}    [${i}] Child returned null!`);
+                    } else if (DEBUG) {
+                        console.warn(`[WARN] Child returned null: ${childData.name || childData.text?.substring(0, 20)}`);
                     }
                 }
-            } else {
-                console.log(`${indent}  No children for ${data.name}`);
             }
 
             return frame;
         }
         return null;
     } catch (e) {
-        console.error(`${indent}[ERROR] Failed to create node: ${data.type} - ${data.name || data.text?.substring(0, 20)}`, e);
+        console.error(`[ERROR] Failed to create node: ${data.type} - ${data.name || data.text?.substring(0, 20)}`, e);
         return null;
     }
 }

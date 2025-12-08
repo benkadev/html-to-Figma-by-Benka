@@ -36,7 +36,7 @@ var __async = (__this, __arguments, generator) => {
       } catch (e) {
         console.error("Failed to preload Inter fonts", e);
       }
-      const wrapperFrame = figma.createFrame();
+      const wrapperSection = figma.createSection();
       let siteName = "Imported Site";
       try {
         const urlObj = new URL(url);
@@ -44,40 +44,72 @@ var __async = (__this, __arguments, generator) => {
       } catch (e) {
         siteName = url || "Imported Site";
       }
-      wrapperFrame.name = siteName;
+      wrapperSection.name = siteName;
       const wrapperWidth = Math.max(1, node.width || 1440);
       const wrapperHeight = Math.max(1, node.height || 900);
-      wrapperFrame.resize(wrapperWidth, wrapperHeight);
-      wrapperFrame.layoutMode = "NONE";
-      wrapperFrame.clipsContent = true;
-      wrapperFrame.fills = [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }];
+      wrapperSection.resizeWithoutConstraints(wrapperWidth, wrapperHeight);
       const offsetX = node.x || 0;
       const offsetY = node.y || 0;
       const rootFrame = yield createFigmaNode(node, 0, offsetX, offsetY);
       if (rootFrame) {
-        wrapperFrame.appendChild(rootFrame);
+        wrapperSection.appendChild(rootFrame);
         rootFrame.x = 0;
         rootFrame.y = 0;
       }
-      wrapperFrame.x = 0;
-      wrapperFrame.y = 0;
-      figma.currentPage.appendChild(wrapperFrame);
-      figma.viewport.scrollAndZoomIntoView([wrapperFrame]);
+      wrapperSection.x = 0;
+      wrapperSection.y = 0;
+      figma.currentPage.appendChild(wrapperSection);
+      figma.viewport.scrollAndZoomIntoView([wrapperSection]);
       figma.notify("Import completed!");
     }
   });
+  function parseBoxShadow(shadowString) {
+    if (!shadowString || shadowString === "none") return [];
+    const effects = [];
+    const shadows = shadowString.split(/,(?![^(]*\))/);
+    for (const shadow of shadows) {
+      const trimmed = shadow.trim();
+      const isInset = trimmed.startsWith("inset");
+      const shadowWithoutInset = isInset ? trimmed.replace("inset", "").trim() : trimmed;
+      const match = shadowWithoutInset.match(/(-?[\d.]+)px\s+(-?[\d.]+)px(?:\s+(-?[\d.]+)px)?(?:\s+(-?[\d.]+)px)?\s+(rgba?\([^)]+\)|#[0-9a-fA-F]+)/);
+      if (match) {
+        const offsetX = parseFloat(match[1]);
+        const offsetY = parseFloat(match[2]);
+        const blur = match[3] ? parseFloat(match[3]) : 0;
+        const spread = match[4] ? parseFloat(match[4]) : 0;
+        const colorString = match[5];
+        let r = 0, g = 0, b = 0, a = 1;
+        const rgbaMatch = colorString.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+        if (rgbaMatch) {
+          r = parseInt(rgbaMatch[1]) / 255;
+          g = parseInt(rgbaMatch[2]) / 255;
+          b = parseInt(rgbaMatch[3]) / 255;
+          a = rgbaMatch[4] ? parseFloat(rgbaMatch[4]) : 1;
+        }
+        effects.push({
+          type: isInset ? "INNER_SHADOW" : "DROP_SHADOW",
+          color: { r, g, b, a },
+          offset: { x: offsetX, y: offsetY },
+          radius: blur,
+          spread,
+          visible: true,
+          blendMode: "NORMAL"
+        });
+      }
+    }
+    return effects;
+  }
   function createFigmaNode(data, depth = 0, offsetX = 0, offsetY = 0) {
     return __async(this, null, function* () {
-      var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m;
+      var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
       if (!data) return null;
-      const indent = "  ".repeat(depth);
-      console.log(`${indent}[createFigmaNode] type=${data.type} name=${data.name || ((_a = data.text) == null ? void 0 : _a.substring(0, 20))} children=${((_b = data.children) == null ? void 0 : _b.length) || 0}`);
+      const DEBUG = false;
       try {
         if (data.type === "TEXT") {
           const textNode = figma.createText();
-          textNode.name = ((_c = data.text) == null ? void 0 : _c.substring(0, 30)) || "Text";
+          textNode.name = ((_a = data.text) == null ? void 0 : _a.substring(0, 30)) || "Text";
           textNode.fontName = { family: "Inter", style: "Regular" };
-          if ((_d = data.style) == null ? void 0 : _d.fontFamily) {
+          if ((_b = data.style) == null ? void 0 : _b.fontFamily) {
             const fontFamily = data.style.fontFamily.split(",")[0].replace(/['\"]/g, "").trim();
             const fontWeight = data.style.fontWeight || "400";
             const isBold = fontWeight === "700" || fontWeight === "bold" || fontWeight === "600" || parseInt(fontWeight) >= 600;
@@ -91,7 +123,7 @@ var __async = (__this, __arguments, generator) => {
               }
             }
           }
-          if (((_e = data.style) == null ? void 0 : _e.fontSize) && data.style.fontSize > 0) {
+          if (((_c = data.style) == null ? void 0 : _c.fontSize) && data.style.fontSize > 0) {
             textNode.fontSize = data.style.fontSize;
           } else {
             textNode.fontSize = 16;
@@ -104,12 +136,12 @@ var __async = (__this, __arguments, generator) => {
           } else {
             textNode.textAutoResize = "WIDTH_AND_HEIGHT";
           }
-          if ((_f = data.style) == null ? void 0 : _f.color) {
-            textNode.fills = [{ type: "SOLID", color: { r: data.style.color.r, g: data.style.color.g, b: data.style.color.b }, opacity: (_g = data.style.color.a) != null ? _g : 1 }];
+          if ((_d = data.style) == null ? void 0 : _d.color) {
+            textNode.fills = [{ type: "SOLID", color: { r: data.style.color.r, g: data.style.color.g, b: data.style.color.b }, opacity: (_e = data.style.color.a) != null ? _e : 1 }];
           } else {
             textNode.fills = [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }];
           }
-          if ((_h = data.style) == null ? void 0 : _h.textAlign) {
+          if ((_f = data.style) == null ? void 0 : _f.textAlign) {
             switch (data.style.textAlign) {
               case "center":
                 textNode.textAlignHorizontal = "CENTER";
@@ -124,10 +156,10 @@ var __async = (__this, __arguments, generator) => {
                 textNode.textAlignHorizontal = "LEFT";
             }
           }
-          if (((_i = data.style) == null ? void 0 : _i.lineHeight) && data.style.lineHeight > 0) {
+          if (((_g = data.style) == null ? void 0 : _g.lineHeight) && data.style.lineHeight > 0) {
             textNode.lineHeight = { value: data.style.lineHeight, unit: "PIXELS" };
           }
-          if ((_j = data.style) == null ? void 0 : _j.letterSpacing) {
+          if ((_h = data.style) == null ? void 0 : _h.letterSpacing) {
             textNode.letterSpacing = { value: data.style.letterSpacing, unit: "PIXELS" };
           }
           return textNode;
@@ -145,7 +177,7 @@ var __async = (__this, __arguments, generator) => {
                 scaleMode: "FILL"
               };
             } catch (e) {
-              console.log("Image load error:", url);
+              console.error("[ERROR] Image load failed:", url);
               return null;
             }
           });
@@ -215,7 +247,7 @@ var __async = (__this, __arguments, generator) => {
               frame.strokes = [{
                 type: "SOLID",
                 color: { r: borderColor.r, g: borderColor.g, b: borderColor.b },
-                opacity: (_k = borderColor.a) != null ? _k : 1
+                opacity: (_i = borderColor.a) != null ? _i : 1
               }];
               frame.strokeWeight = maxW;
               if (data.style.border.top.width !== data.style.border.bottom.width) {
@@ -229,11 +261,44 @@ var __async = (__this, __arguments, generator) => {
           if (typeof data.style.opacity === "number") {
             frame.opacity = data.style.opacity;
           }
+          if (data.style.boxShadow) {
+            const effects = parseBoxShadow(data.style.boxShadow);
+            if (effects.length > 0) {
+              frame.effects = effects;
+            }
+          }
+          if (data.style.transform) {
+            const transform = data.style.transform;
+            if (transform.rotation && transform.rotation !== 0) {
+              frame.rotation = transform.rotation;
+            }
+            if (transform.scaleX || transform.scaleY || transform.translateX || transform.translateY) {
+              const transformInfo = [];
+              if (transform.translateX) transformInfo.push(`translateX:${transform.translateX.toFixed(1)}px`);
+              if (transform.translateY) transformInfo.push(`translateY:${transform.translateY.toFixed(1)}px`);
+              if (transform.scaleX && transform.scaleX !== 1) transformInfo.push(`scaleX:${transform.scaleX.toFixed(2)}`);
+              if (transform.scaleY && transform.scaleY !== 1) transformInfo.push(`scaleY:${transform.scaleY.toFixed(2)}`);
+              if (transformInfo.length > 0) {
+                frame.name = `${frame.name} [${transformInfo.join(", ")}]`;
+              }
+            }
+          }
+          if (data.style.display === "grid" && data.style.gridTemplateColumns) {
+            const gridInfo = [`grid-cols:${data.style.gridTemplateColumns}`];
+            if (data.style.gridTemplateRows) gridInfo.push(`grid-rows:${data.style.gridTemplateRows}`);
+            if (data.style.gridColumnGap) gridInfo.push(`gap-x:${data.style.gridColumnGap}px`);
+            if (data.style.gridRowGap) gridInfo.push(`gap-y:${data.style.gridRowGap}px`);
+            frame.name = `${frame.name} [${gridInfo.join(", ")}]`;
+          }
           if (data.children && data.children.length > 0) {
-            console.log(`${indent}  Processing ${data.children.length} children of ${data.name}`);
-            for (let i = 0; i < data.children.length; i++) {
-              const childData = data.children[i];
-              console.log(`${indent}    [${i}] Creating child: ${childData.type} - ${childData.name || ((_l = childData.text) == null ? void 0 : _l.substring(0, 20))}`);
+            const sortedChildren = [...data.children].sort((a, b) => {
+              var _a2, _b2;
+              const zIndexA = parseInt(((_a2 = a.style) == null ? void 0 : _a2.zIndex) || "0") || 0;
+              const zIndexB = parseInt(((_b2 = b.style) == null ? void 0 : _b2.zIndex) || "0") || 0;
+              return zIndexA - zIndexB;
+            });
+            for (let i = 0; i < sortedChildren.length; i++) {
+              const childData = sortedChildren[i];
               const childNode = yield createFigmaNode(childData, depth + 1, offsetX, offsetY);
               if (childNode) {
                 frame.appendChild(childNode);
@@ -241,18 +306,14 @@ var __async = (__this, __arguments, generator) => {
                 const relY = childData.y - data.y;
                 if (!isNaN(relX) && isFinite(relX)) childNode.x = relX;
                 if (!isNaN(relY) && isFinite(relY)) childNode.y = relY;
-              } else {
-                console.log(`${indent}    [${i}] Child returned null!`);
-              }
+              } else if (DEBUG) ;
             }
-          } else {
-            console.log(`${indent}  No children for ${data.name}`);
           }
           return frame;
         }
         return null;
       } catch (e) {
-        console.error(`${indent}[ERROR] Failed to create node: ${data.type} - ${data.name || ((_m = data.text) == null ? void 0 : _m.substring(0, 20))}`, e);
+        console.error(`[ERROR] Failed to create node: ${data.type} - ${data.name || ((_j = data.text) == null ? void 0 : _j.substring(0, 20))}`, e);
         return null;
       }
     });
