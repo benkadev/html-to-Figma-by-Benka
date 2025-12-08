@@ -25,6 +25,16 @@ interface CssTransform {
     scaleY?: number;
 }
 
+interface ElementConstraints {
+    horizontal: 'MIN' | 'CENTER' | 'MAX' | 'SCALE';
+    vertical: 'MIN' | 'CENTER' | 'MAX' | 'SCALE';
+}
+
+interface Gradient {
+    type: 'LINEAR_GRADIENT' | 'RADIAL_GRADIENT';
+    cssValue: string;
+}
+
 interface NodeData {
     type: 'FRAME' | 'TEXT' | 'IMAGE' | 'SVG';
     name: string;
@@ -36,6 +46,9 @@ interface NodeData {
     height: number;
     imageSrc?: string;
     backgroundImage?: string;
+    gradient?: Gradient;
+    inputType?: string;
+    constraints?: ElementConstraints;
     children?: NodeData[];
     style: {
         backgroundColor?: Rgba;
@@ -74,6 +87,9 @@ interface NodeData {
         zIndex?: string;
         // Transform properties
         transform?: CssTransform;
+        // Object fit for images (from Builder.io)
+        objectFit?: string;
+        objectPosition?: string;
     };
 }
 
@@ -270,17 +286,28 @@ async function createFigmaNode(data: NodeData, depth: number = 0, offsetX: numbe
             return textNode;
         }
 
-        // Helper to fetch image
-        async function fetchImage(url: string): Promise<ImagePaint | null> {
+        // Helper to fetch image with object-fit support
+        async function fetchImage(url: string, objectFit?: string): Promise<ImagePaint | null> {
             try {
                 const response = await fetch(url);
                 if (!response.ok) return null;
                 const buffer = await response.arrayBuffer();
                 const image = figma.createImage(new Uint8Array(buffer));
+
+                // Determine scaleMode based on objectFit (from Builder.io)
+                let scaleMode: 'FILL' | 'FIT' | 'CROP' | 'TILE' = 'FILL';
+                if (objectFit === 'contain') {
+                    scaleMode = 'FIT';
+                } else if (objectFit === 'cover') {
+                    scaleMode = 'FILL';
+                } else if (objectFit === 'none') {
+                    scaleMode = 'CROP';
+                }
+
                 return {
                     type: 'IMAGE',
                     imageHash: image.hash,
-                    scaleMode: 'FILL'
+                    scaleMode: scaleMode
                 };
             } catch (e) {
                 console.error("[ERROR] Image load failed:", url);
@@ -291,16 +318,25 @@ async function createFigmaNode(data: NodeData, depth: number = 0, offsetX: numbe
         // --- IMAGE NODE ---
         if (data.type === 'IMAGE') {
             const rect = figma.createRectangle();
-            rect.name = "Image";
+            rect.name = data.name || "Image";
             rect.resize(Math.max(1, data.width || 1), Math.max(1, data.height || 1));
 
             let fills: Paint[] = [{ type: 'SOLID', color: { r: 0.85, g: 0.85, b: 0.85 } }];
 
             if (data.imageSrc) {
-                const imagePaint = await fetchImage(data.imageSrc);
+                const imagePaint = await fetchImage(data.imageSrc, data.style?.objectFit);
                 if (imagePaint) fills = [imagePaint];
             }
             rect.fills = fills;
+
+            // Apply border radius to images
+            if (data.style?.borderRadius) {
+                rect.topLeftRadius = data.style.borderRadius.tl || 0;
+                rect.topRightRadius = data.style.borderRadius.tr || 0;
+                rect.bottomLeftRadius = data.style.borderRadius.bl || 0;
+                rect.bottomRightRadius = data.style.borderRadius.br || 0;
+            }
+
             return rect;
         }
 
@@ -475,6 +511,19 @@ async function createFigmaNode(data: NodeData, depth: number = 0, offsetX: numbe
 
                         if (!isNaN(relX) && isFinite(relX)) childNode.x = relX;
                         if (!isNaN(relY) && isFinite(relY)) childNode.y = relY;
+
+                        // Apply constraints from extraction (from Builder.io)
+                        if (childData.constraints && 'constraints' in childNode) {
+                            const constraints = childData.constraints;
+                            try {
+                                (childNode as ConstraintMixin).constraints = {
+                                    horizontal: constraints.horizontal || 'SCALE',
+                                    vertical: constraints.vertical || 'MIN'
+                                };
+                            } catch (e) {
+                                // Some node types don't support constraints
+                            }
+                        }
                     } else if (DEBUG) {
                         console.warn(`[WARN] Child returned null: ${childData.name || childData.text?.substring(0, 20)}`);
                     }

@@ -101,7 +101,7 @@ var __async = (__this, __arguments, generator) => {
   }
   function createFigmaNode(data, depth = 0, offsetX = 0, offsetY = 0) {
     return __async(this, null, function* () {
-      var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
+      var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
       if (!data) return null;
       const DEBUG = false;
       try {
@@ -164,17 +164,25 @@ var __async = (__this, __arguments, generator) => {
           }
           return textNode;
         }
-        function fetchImage(url) {
+        function fetchImage(url, objectFit) {
           return __async(this, null, function* () {
             try {
               const response = yield fetch(url);
               if (!response.ok) return null;
               const buffer = yield response.arrayBuffer();
               const image = figma.createImage(new Uint8Array(buffer));
+              let scaleMode = "FILL";
+              if (objectFit === "contain") {
+                scaleMode = "FIT";
+              } else if (objectFit === "cover") {
+                scaleMode = "FILL";
+              } else if (objectFit === "none") {
+                scaleMode = "CROP";
+              }
               return {
                 type: "IMAGE",
                 imageHash: image.hash,
-                scaleMode: "FILL"
+                scaleMode
               };
             } catch (e) {
               console.error("[ERROR] Image load failed:", url);
@@ -184,14 +192,20 @@ var __async = (__this, __arguments, generator) => {
         }
         if (data.type === "IMAGE") {
           const rect = figma.createRectangle();
-          rect.name = "Image";
+          rect.name = data.name || "Image";
           rect.resize(Math.max(1, data.width || 1), Math.max(1, data.height || 1));
           let fills = [{ type: "SOLID", color: { r: 0.85, g: 0.85, b: 0.85 } }];
           if (data.imageSrc) {
-            const imagePaint = yield fetchImage(data.imageSrc);
+            const imagePaint = yield fetchImage(data.imageSrc, (_i = data.style) == null ? void 0 : _i.objectFit);
             if (imagePaint) fills = [imagePaint];
           }
           rect.fills = fills;
+          if ((_j = data.style) == null ? void 0 : _j.borderRadius) {
+            rect.topLeftRadius = data.style.borderRadius.tl || 0;
+            rect.topRightRadius = data.style.borderRadius.tr || 0;
+            rect.bottomLeftRadius = data.style.borderRadius.bl || 0;
+            rect.bottomRightRadius = data.style.borderRadius.br || 0;
+          }
           return rect;
         }
         if (data.type === "SVG" && data.svg) {
@@ -247,7 +261,7 @@ var __async = (__this, __arguments, generator) => {
               frame.strokes = [{
                 type: "SOLID",
                 color: { r: borderColor.r, g: borderColor.g, b: borderColor.b },
-                opacity: (_i = borderColor.a) != null ? _i : 1
+                opacity: (_k = borderColor.a) != null ? _k : 1
               }];
               frame.strokeWeight = maxW;
               if (data.style.border.top.width !== data.style.border.bottom.width) {
@@ -306,6 +320,16 @@ var __async = (__this, __arguments, generator) => {
                 const relY = childData.y - data.y;
                 if (!isNaN(relX) && isFinite(relX)) childNode.x = relX;
                 if (!isNaN(relY) && isFinite(relY)) childNode.y = relY;
+                if (childData.constraints && "constraints" in childNode) {
+                  const constraints = childData.constraints;
+                  try {
+                    childNode.constraints = {
+                      horizontal: constraints.horizontal || "SCALE",
+                      vertical: constraints.vertical || "MIN"
+                    };
+                  } catch (e) {
+                  }
+                }
               } else if (DEBUG) ;
             }
           }
@@ -313,7 +337,7 @@ var __async = (__this, __arguments, generator) => {
         }
         return null;
       } catch (e) {
-        console.error(`[ERROR] Failed to create node: ${data.type} - ${data.name || ((_j = data.text) == null ? void 0 : _j.substring(0, 20))}`, e);
+        console.error(`[ERROR] Failed to create node: ${data.type} - ${data.name || ((_l = data.text) == null ? void 0 : _l.substring(0, 20))}`, e);
         return null;
       }
     });
